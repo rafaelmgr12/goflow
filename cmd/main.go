@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"context"
@@ -7,11 +7,20 @@ import (
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
 
-// TODO: Ask about struct and interface here, why we do not need to declare implicitly
-type EmailHandler struct{}
+func main() {
+	ctx := context.Background()
 
-func (h EmailHandler) Handle(ctx context.Context, j job.Job) error {
-	fmt.Printf("sending email for job %s\n", j.ID)
+	executor := job.NewExecutor()
 
-	return nil
+	executor.Register("send_email", job.EmailHandler{})
+
+	j := job.Job{
+		ID:     "job-1",
+		Type:   "send_email",
+		Status: job.StatusPending,
+	}
+
+	if err := executor.Execute(ctx, j); err != nil {
+		fmt.Println("failed to execute job:", err)
+	}
 }
