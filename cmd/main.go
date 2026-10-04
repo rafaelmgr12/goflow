@@ -3,24 +3,75 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
+	"github.com/rafaelmgr12/goflow/internal/worker"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	executor := job.NewExecutor()
 
-	executor.Register("send_email", job.EmailHandler{})
+	executor.Register(
+		"send_email",
+		job.EmailHandler{},
+	)
 
-	j := job.Job{
-		ID:     "job-1",
-		Type:   "send_email",
-		Status: job.StatusPending,
+	jobs := make(chan job.Job)
+
+	var wg sync.WaitGroup
+
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+
+		go func(workerID int) {
+			defer wg.Done()
+
+			worker.Run(
+				ctx,
+				workerID,
+				jobs,
+				executor,
+			)
+		}(i)
 	}
 
-	if err := executor.Execute(ctx, j); err != nil {
-		fmt.Println("failed to execute job:", err)
+	for i := 1; i <= 100; i++ {
+		j := job.Job{
+			ID:     fmt.Sprintf("job-%d", i),
+			Type:   "send_email",
+			Status: job.StatusPending,
+		}
+
+		select {
+		case <-ctx.Done():
+			log.Println("producer shutting down")
+
+			close(jobs)
+
+			wg.Wait()
+
+			log.Println("shutdown complete")
+			return
+
+		case jobs <- j:
+		}
 	}
+
+	close(jobs)
+
+	wg.Wait()
+
+	log.Println("all jobs completed")
 }
