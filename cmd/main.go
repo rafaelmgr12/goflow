@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
+	"time"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
-	"github.com/rafaelmgr12/goflow/internal/worker"
+	"github.com/rafaelmgr12/goflow/internal/storage/postgres"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -21,57 +24,49 @@ func main() {
 	)
 	defer stop()
 
-	executor := job.NewExecutor()
-
-	executor.Register(
-		"send_email",
-		job.EmailHandler{},
+	db, err := sql.Open(
+		"pgx",
+		"postgres://goflow:goflow@localhost:5432/goflow?sslmode=disable",
 	)
+	if err != nil {
+		log.Fatal("opening postgres: ", err)
+	}
+	defer db.Close()
 
-	jobs := make(chan job.Job)
-
-	var wg sync.WaitGroup
-
-	for i := 1; i <= 3; i++ {
-		wg.Add(1)
-
-		go func(workerID int) {
-			defer wg.Done()
-
-			worker.Run(
-				ctx,
-				workerID,
-				jobs,
-				executor,
-			)
-		}(i)
+	if err := db.PingContext(ctx); err != nil {
+		log.Fatal("postgres unavailable: ", err)
 	}
 
-	for i := 1; i <= 100; i++ {
-		j := job.Job{
-			ID:     fmt.Sprintf("job-%d", i),
-			Type:   "send_email",
-			Status: job.StatusPending,
-		}
+	log.Println("connected to postgres")
 
-		select {
-		case <-ctx.Done():
-			log.Println("producer shutting down")
+	repo := postgres.NewJobRepository(db)
 
-			close(jobs)
+	now := time.Now().UTC()
 
-			wg.Wait()
-
-			log.Println("shutdown complete")
-			return
-
-		case jobs <- j:
-		}
+	j := job.Job{
+		ID:          fmt.Sprintf("job-%d", now.UnixNano()),
+		Type:        "send_email",
+		Payload:     []byte(`{"to":"rafa@example.com"}`),
+		Status:      job.StatusPending,
+		ScheduledAt: now,
+		CreatedAt:   now,
 	}
 
-	close(jobs)
+	if err := repo.Save(ctx, j); err != nil {
+		log.Fatal("saving job: ", err)
+	}
 
-	wg.Wait()
+	log.Printf("job %s saved successfully", j.ID)
 
-	log.Println("all jobs completed")
+	savedJob, err := repo.FindByID(ctx, j.ID)
+	if err != nil {
+		log.Fatal("finding job: ", err)
+	}
+
+	log.Printf(
+		"job loaded: id=%s type=%s status=%s",
+		savedJob.ID,
+		savedJob.Type,
+		savedJob.Status,
+	)
 }

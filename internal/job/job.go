@@ -12,9 +12,10 @@ const (
 )
 
 type Job struct {
-	ID        string
-	Type      string
-	Payload   []byte
-	Status    Status
-	CreatedAt time.Time
+	ID          string
+	Type        string
+	Payload     []byte
+	Status      Status
+	CreatedAt   time.Time
+	ScheduledAt time.Time
 }
