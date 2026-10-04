@@ -28,6 +28,9 @@ go.work.sum
 # env file
 .env
 
+# Executáveis gerados pelo Makefile
+/bin/
+
 # Editor/IDE
 # .idea/
 # .vscode/
