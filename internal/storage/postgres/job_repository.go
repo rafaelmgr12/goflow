@@ -100,3 +100,129 @@ func (r *JobRepository) FindByID(
 
 	return j, nil
 }
+
+func (r *JobRepository) MarkRunning(
+	ctx context.Context,
+	id string,
+) error {
+	const query = `
+		UPDATE jobs
+		SET status = $1
+		WHERE id = $2
+		  AND status = $3
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		job.StatusRunning,
+		id,
+		job.StatusPending,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"marking job %s as running: %w",
+			id,
+			err,
+		)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"getting affected rows for job %s: %w",
+			id,
+			err,
+		)
+	}
+
+	if rows == 0 {
+		return job.ErrInvalidTransition
+	}
+
+	return nil
+}
+
+func (r *JobRepository) MarkCompleted(
+	ctx context.Context,
+	id string,
+) error {
+	const query = `
+		UPDATE jobs
+		SET status = $1
+		WHERE id = $2
+		  AND status = $3
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		job.StatusCompleted,
+		id,
+		job.StatusRunning,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"marking job %s as completed: %w",
+			id,
+			err,
+		)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"getting affected rows for job %s: %w",
+			id,
+			err,
+		)
+	}
+
+	if rows == 0 {
+		return job.ErrInvalidTransition
+	}
+
+	return nil
+}
+
+func (r *JobRepository) MarkFailed(
+	ctx context.Context,
+	id string,
+) error {
+	const query = `
+		UPDATE jobs
+		SET status = $1
+		WHERE id = $2
+		  AND status = $3
+	`
+
+	result, err := r.db.ExecContext(
+		ctx,
+		query,
+		job.StatusFailed,
+		id,
+		job.StatusRunning,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"marking job %s as failed: %w",
+			id,
+			err,
+		)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"getting affected rows for job %s: %w",
+			id,
+			err,
+		)
+	}
+
+	if rows == 0 {
+		return job.ErrInvalidTransition
+	}
+
+	return nil
+}
