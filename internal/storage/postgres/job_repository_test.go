@@ -37,6 +37,24 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("pinging database: %v", err)
 	}
 
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	schema := fmt.Sprintf("test_jobs_%d", time.Now().UnixNano())
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatalf("creating test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := db.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Errorf("cleaning test schema: %v", err)
+		}
+	})
+	if _, err := db.ExecContext(ctx, "CREATE TABLE "+schema+".jobs (LIKE public.jobs INCLUDING ALL)"); err != nil {
+		t.Fatalf("creating test jobs table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "SET search_path TO "+schema); err != nil {
+		t.Fatalf("setting test search_path: %v", err)
+	}
 	return db
 }
 
@@ -57,8 +75,6 @@ func TestJobRepository_SaveAndFindByID(t *testing.T) {
 		ScheduledAt: now.Add(time.Hour),
 		CreatedAt:   now,
 	}
-
-	cleanupTestJob(t, db, expected.ID)
 
 	if err := repo.Save(ctx, expected); err != nil {
 		t.Fatalf("saving job: %v", err)
@@ -108,16 +124,6 @@ func TestJobRepository_SaveAndFindByID(t *testing.T) {
 	}
 }
 
-func cleanupTestJob(t *testing.T, db *sql.DB, id string) {
-	t.Helper()
-	t.Cleanup(func() {
-		_, err := db.ExecContext(context.Background(), "DELETE FROM jobs WHERE id = $1", id)
-		if err != nil {
-			t.Errorf("cleaning test job: %v", err)
-		}
-	})
-}
-
 func TestJobRepository_MarkRunning(t *testing.T) {
 	testStatusTransition(t, (*JobRepository).MarkRunning, job.StatusPending, job.StatusRunning)
 }
@@ -157,7 +163,6 @@ func testStatusTransition(
 				CreatedAt:   now,
 				ScheduledAt: now.Add(time.Hour),
 			}
-			cleanupTestJob(t, db, j.ID)
 			if err := repo.Save(ctx, j); err != nil {
 				t.Fatalf("saving job: %v", err)
 			}
@@ -197,7 +202,6 @@ func TestJobRepository_StatusCheck(t *testing.T) {
 		Type: "send_email", Payload: []byte(`{}`),
 		Status: job.Status("banana"), CreatedAt: now, ScheduledAt: now,
 	}
-	cleanupTestJob(t, db, j.ID)
 
 	t.Run("Insert", func(t *testing.T) {
 		err := repo.Save(ctx, j)
@@ -282,13 +286,6 @@ func TestJobRepository_CompleteLifecycle(t *testing.T) {
 		CreatedAt:   now,
 	}
 
-	t.Cleanup(func() {
-		_, _ = db.Exec(
-			"DELETE FROM jobs WHERE id = $1",
-			j.ID,
-		)
-	})
-
 	if err := repo.Save(ctx, j); err != nil {
 		t.Fatalf("saving job: %v", err)
 	}
@@ -312,5 +309,173 @@ func TestJobRepository_CompleteLifecycle(t *testing.T) {
 			job.StatusCompleted,
 			saved.Status,
 		)
+	}
+}
+
+func TestJobRepository_FindDueJobs(t *testing.T) {
+	tests := []struct {
+		status    job.Status
+		wantCount int
+	}{
+		{status: job.StatusPending, wantCount: 1},
+		{status: job.StatusRunning, wantCount: 0},
+		{status: job.StatusCompleted, wantCount: 0},
+		{status: job.StatusFailed, wantCount: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			db := setupTestDB(t)
+			repo := NewJobRepository(db)
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			j := job.Job{
+				ID:          "integration-due-job",
+				Type:        "send_email",
+				Payload:     []byte(`{"to":"test@example.com"}`),
+				Status:      tt.status,
+				CreatedAt:   now.Add(-2 * time.Hour),
+				ScheduledAt: now.Add(-time.Hour),
+			}
+
+			if err := repo.Save(ctx, j); err != nil {
+				t.Fatalf("saving job: %v", err)
+			}
+
+			actual, err := repo.FindDueJobs(ctx, now, 10)
+			if err != nil {
+				t.Fatalf("finding due jobs: %v", err)
+			}
+			if len(actual) != tt.wantCount {
+				t.Fatalf("expected %d jobs, got %d", tt.wantCount, len(actual))
+			}
+			if tt.wantCount == 1 {
+				if actual[0].ID != j.ID {
+					t.Fatalf("expected id %s, got %s", j.ID, actual[0].ID)
+				}
+				if actual[0].Status != job.StatusPending {
+					t.Fatalf("expected status pending, got %s", actual[0].Status)
+				}
+			}
+		})
+	}
+}
+
+func TestJobRepository_FindDueJobs_Empty(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewJobRepository(db)
+	jobs, err := repo.FindDueJobs(context.Background(), time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("finding due jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected no jobs, got %v", jobs)
+	}
+}
+
+func TestJobRepository_FindDueJobs_Contract(t *testing.T) {
+	dueTime := time.Date(2026, 1, 10, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		jobs    []job.Job
+		limit   int
+		wantIDs []string
+	}{
+		{
+			name: "Time",
+			jobs: []job.Job{
+				{ID: "C", ScheduledAt: dueTime.Add(time.Minute)},
+				{ID: "B", ScheduledAt: dueTime},
+				{ID: "A", ScheduledAt: dueTime.Add(-time.Hour)},
+			},
+			limit:   10,
+			wantIDs: []string{"A", "B"},
+		},
+		{
+			name: "PositiveLimit",
+			jobs: []job.Job{
+				{ID: "E", ScheduledAt: dueTime},
+				{ID: "D", ScheduledAt: dueTime.Add(-time.Minute)},
+				{ID: "C", ScheduledAt: dueTime.Add(-2 * time.Minute)},
+				{ID: "B", ScheduledAt: dueTime.Add(-3 * time.Minute)},
+				{ID: "A", ScheduledAt: dueTime.Add(-4 * time.Minute)},
+			},
+			limit:   2,
+			wantIDs: []string{"A", "B"},
+		},
+		{
+			name: "Ordering",
+			// Reverse the insertion order, with ties on scheduled_at and created_at.
+			jobs: []job.Job{
+				{ID: "D", ScheduledAt: dueTime, CreatedAt: dueTime.Add(-2 * time.Hour)},
+				{ID: "A", ScheduledAt: dueTime, CreatedAt: dueTime.Add(-2 * time.Hour)},
+				{ID: "C", ScheduledAt: dueTime, CreatedAt: dueTime.Add(-3 * time.Hour)},
+				{ID: "B", ScheduledAt: dueTime.Add(-time.Hour), CreatedAt: dueTime.Add(-90 * time.Minute)},
+			},
+			limit:   10,
+			wantIDs: []string{"B", "C", "A", "D"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			repo := NewJobRepository(db)
+			ctx := context.Background()
+			for _, j := range tt.jobs {
+				j.Type = "send_email"
+				j.Payload = []byte(`{}`)
+				j.Status = job.StatusPending
+				if j.CreatedAt.IsZero() {
+					j.CreatedAt = dueTime.Add(-24 * time.Hour)
+				}
+				if err := repo.Save(ctx, j); err != nil {
+					t.Fatalf("saving job %s: %v", j.ID, err)
+				}
+			}
+
+			actual, err := repo.FindDueJobs(ctx, dueTime, tt.limit)
+			if err != nil {
+				t.Fatalf("finding due jobs: %v", err)
+			}
+			if len(actual) != len(tt.wantIDs) {
+				t.Fatalf("expected %d jobs, got %d", len(tt.wantIDs), len(actual))
+			}
+			for i, id := range tt.wantIDs {
+				if actual[i].ID != id {
+					t.Fatalf("expected id %s at index %d, got %s", id, i, actual[i].ID)
+				}
+			}
+		})
+	}
+}
+
+func TestJobRepository_FindDueJobs_InvalidLimit(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewJobRepository(db)
+	for _, limit := range []int{0, -1} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			jobs, err := repo.FindDueJobs(context.Background(), time.Now().UTC(), limit)
+			if err == nil {
+				t.Fatal("expected invalid limit to fail")
+			}
+			if jobs != nil {
+				t.Fatalf("expected no jobs on error, got %v", jobs)
+			}
+		})
+	}
+}
+
+func TestJobRepository_FindDueJobs_CanceledContext(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewJobRepository(db)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	jobs, err := repo.FindDueJobs(ctx, time.Now().UTC(), 10)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if jobs != nil {
+		t.Fatalf("expected no jobs on error, got %v", jobs)
 	}
 }
