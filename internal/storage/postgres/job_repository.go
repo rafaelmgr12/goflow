@@ -233,6 +233,13 @@ func (r *JobRepository) FindDueJobs(
 	dueTime time.Time,
 	limit int,
 ) ([]job.Job, error) {
+
+	if limit <= 0 {
+		return nil, fmt.Errorf(
+			"limit must be greater than zero: %d",
+			limit,
+		)
+	}
 	const query = `
 		SELECT
 			id,
