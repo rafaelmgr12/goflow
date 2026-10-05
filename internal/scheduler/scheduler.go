@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
@@ -30,6 +31,14 @@ func NewScheduler(
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {
+	if err := s.poll(ctx, time.Now().UTC()); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		log.Printf("scheduler poll failed: %v", err)
+	}
+
 	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 
@@ -39,9 +48,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			return ctx.Err()
 
 		case <-ticker.C:
-			if err := s.poll(ctx, time.Now()); err != nil {
-				return fmt.Errorf(
-					"polling for due jobs: %w",
+			if err := s.poll(ctx, time.Now().UTC()); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+
+				log.Printf(
+					"scheduler poll failed: %v",
 					err,
 				)
 			}

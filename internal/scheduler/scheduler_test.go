@@ -18,6 +18,8 @@ type fakeRepository struct {
 	limit   int
 	jobs    []job.Job
 	err     error
+	errors  []error
+	queried chan time.Time
 }
 
 func (f *fakeRepository) FindDueJobs(ctx context.Context, dueTime time.Time, limit int) ([]job.Job, error) {
@@ -26,7 +28,129 @@ func (f *fakeRepository) FindDueJobs(ctx context.Context, dueTime time.Time, lim
 	f.ctx = ctx
 	f.dueTime = dueTime
 	f.limit = limit
+	if f.queried != nil {
+		select {
+		case f.queried <- dueTime:
+		default:
+		}
+	}
+	if f.calls <= len(f.errors) {
+		return nil, f.errors[f.calls-1]
+	}
 	return f.jobs, f.err
+}
+
+func TestScheduler_Run_PollsImmediately(t *testing.T) {
+	repository := &fakeRepository{queried: make(chan time.Time, 1)}
+	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	done, cancel := startScheduler(t, s)
+
+	select {
+	case dueTime := <-repository.queried:
+		if dueTime.Location() != time.UTC {
+			t.Fatalf("expected UTC dueTime, got %v", dueTime.Location())
+		}
+	case err := <-done:
+		t.Fatalf("scheduler stopped before polling: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected polling before the first hourly tick")
+	}
+	cancel()
+	assertSchedulerCanceled(t, done)
+}
+
+func TestScheduler_Run_ContinuesAfterPollError(t *testing.T) {
+	repositoryErr := errors.New("repository unavailable")
+	tests := []struct {
+		name   string
+		errors []error
+	}{
+		{name: "InitialPollError", errors: []error{repositoryErr}},
+		{name: "PeriodicPollError", errors: []error{nil, repositoryErr}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := job.Job{ID: "job-1", Status: job.StatusPending}
+			repository := &fakeRepository{errors: tt.errors, jobs: []job.Job{want}}
+			jobs := make(chan job.Job)
+			s := NewScheduler(repository, jobs, 10, 10*time.Millisecond)
+			done, cancel := startScheduler(t, s)
+
+			select {
+			case got := <-jobs:
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("expected job %+v, got %+v", want, got)
+				}
+			case err := <-done:
+				t.Fatalf("scheduler stopped instead of retrying: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("expected a job from the poll after the error")
+			}
+			cancel()
+			assertSchedulerCanceled(t, done)
+		})
+	}
+}
+
+func TestScheduler_Run_CanceledWhileSending(t *testing.T) {
+	repository := &fakeRepository{
+		jobs:    []job.Job{{ID: "job-1", Status: job.StatusPending}},
+		queried: make(chan time.Time, 1),
+	}
+	// No receiver: Run must leave the blocked send when canceled.
+	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	done, cancel := startScheduler(t, s)
+	select {
+	case <-repository.queried:
+	case err := <-done:
+		t.Fatalf("scheduler stopped before polling: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected repository query")
+	}
+	cancel()
+	assertSchedulerCanceled(t, done)
+}
+
+func TestScheduler_Run_CanceledContextWithRepositoryError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	repository := &fakeRepository{err: errors.New("repository unavailable")}
+	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func startScheduler(t *testing.T, s *Scheduler) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		done <- s.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Error("scheduler did not stop after cancellation")
+		}
+	})
+	return done, cancel
+}
+
+func assertSchedulerCanceled(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduler did not return after cancellation")
+	}
 }
 
 func TestScheduler_Poll(t *testing.T) {
