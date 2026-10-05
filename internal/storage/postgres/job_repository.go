@@ -233,21 +233,23 @@ func (r *JobRepository) FindDueJobs(
 	dueTime time.Time,
 	limit int,
 ) ([]job.Job, error) {
-	const query = `SELECT
-    id,
-    type,
-    payload,
-    status,
-    scheduled_at,
-    created_at
-FROM jobs
-WHERE status = $1
-  AND scheduled_at <= $2
-ORDER BY
-    scheduled_at ASC,
-    created_at ASC,
-    id ASC
-LIMIT $3;`
+	const query = `
+		SELECT
+			id,
+			type,
+			payload,
+			status,
+			scheduled_at,
+			created_at
+		FROM jobs
+		WHERE status = $1
+		  AND scheduled_at <= $2
+		ORDER BY
+			scheduled_at ASC,
+			created_at ASC,
+			id ASC
+		LIMIT $3
+	`
 
 	rows, err := r.db.QueryContext(
 		ctx,
@@ -256,14 +258,15 @@ LIMIT $3;`
 		dueTime,
 		limit,
 	)
-
 	if err != nil {
-		return nil, fmt.Errorf("finding due jobs: %w", err)
+		return nil, fmt.Errorf(
+			"finding due jobs: %w",
+			err,
+		)
 	}
-
 	defer rows.Close()
 
-	var jobs []job.Job
+	jobs := make([]job.Job, 0, limit)
 
 	for rows.Next() {
 		var j job.Job
@@ -276,14 +279,20 @@ LIMIT $3;`
 			&j.ScheduledAt,
 			&j.CreatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scanning job: %w", err)
+			return nil, fmt.Errorf(
+				"scanning due job: %w",
+				err,
+			)
 		}
 
 		jobs = append(jobs, j)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating over jobs: %w", err)
+		return nil, fmt.Errorf(
+			"iterating due jobs: %w",
+			err,
+		)
 	}
 
 	return jobs, nil
