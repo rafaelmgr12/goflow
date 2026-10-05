@@ -1,0 +1,1 @@
+DROP INDEX idx_jobs_status_scheduled_at;
