@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
@@ -118,6 +119,24 @@ func cleanupTestJob(t *testing.T, db *sql.DB, id string) {
 }
 
 func TestJobRepository_MarkRunning(t *testing.T) {
+	testStatusTransition(t, (*JobRepository).MarkRunning, job.StatusPending, job.StatusRunning)
+}
+
+func TestJobRepository_MarkCompleted(t *testing.T) {
+	testStatusTransition(t, (*JobRepository).MarkCompleted, job.StatusRunning, job.StatusCompleted)
+}
+
+func TestJobRepository_MarkFailed(t *testing.T) {
+	testStatusTransition(t, (*JobRepository).MarkFailed, job.StatusRunning, job.StatusFailed)
+}
+
+func testStatusTransition(
+	t *testing.T,
+	mark func(*JobRepository, context.Context, string) error,
+	from job.Status,
+	to job.Status,
+) {
+	t.Helper()
 	db := setupTestDB(t)
 	repo := NewJobRepository(db)
 	ctx := context.Background()
@@ -143,13 +162,13 @@ func TestJobRepository_MarkRunning(t *testing.T) {
 				t.Fatalf("saving job: %v", err)
 			}
 
-			err := repo.MarkRunning(ctx, j.ID)
+			err := mark(repo, ctx, j.ID)
 			want := status
-			if status == job.StatusPending {
+			if status == from {
 				if err != nil {
-					t.Fatalf("marking job as running: %v", err)
+					t.Fatalf("marking job as %s: %v", to, err)
 				}
-				want = job.StatusRunning
+				want = to
 			} else if !errors.Is(err, job.ErrInvalidTransition) {
 				t.Fatalf("expected ErrInvalidTransition, got %v", err)
 			}
@@ -162,9 +181,54 @@ func TestJobRepository_MarkRunning(t *testing.T) {
 				t.Fatalf("expected status %s, got %s", want, actual.Status)
 			}
 			if actual.ID != j.ID || actual.Type != j.Type || !actual.CreatedAt.Equal(j.CreatedAt) || !actual.ScheduledAt.Equal(j.ScheduledAt) {
-				t.Fatal("marking job as running changed other job fields")
+				t.Fatal("status transition changed other job fields")
 			}
 		})
+	}
+}
+
+func TestJobRepository_StatusCheck(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewJobRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	j := job.Job{
+		ID:   t.Name() + "-" + now.Format("20060102150405.000000000"),
+		Type: "send_email", Payload: []byte(`{}`),
+		Status: job.Status("banana"), CreatedAt: now, ScheduledAt: now,
+	}
+	cleanupTestJob(t, db, j.ID)
+
+	t.Run("Insert", func(t *testing.T) {
+		err := repo.Save(ctx, j)
+		assertStatusCheckViolation(t, err)
+		if _, err := repo.FindByID(ctx, j.ID); !errors.Is(err, job.ErrNotFound) {
+			t.Fatalf("expected rejected job to be absent, got %v", err)
+		}
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		j.Status = job.StatusPending
+		if err := repo.Save(ctx, j); err != nil {
+			t.Fatalf("saving job: %v", err)
+		}
+		_, err := db.ExecContext(ctx, "UPDATE jobs SET status = $1 WHERE id = $2", "banana", j.ID)
+		assertStatusCheckViolation(t, err)
+		actual, err := repo.FindByID(ctx, j.ID)
+		if err != nil {
+			t.Fatalf("finding job: %v", err)
+		}
+		if actual.Status != job.StatusPending {
+			t.Fatalf("expected status pending, got %s", actual.Status)
+		}
+	})
+}
+
+func assertStatusCheckViolation(t *testing.T, err error) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "jobs_status_check" {
+		t.Fatalf("expected jobs_status_check violation, got %v", err)
 	}
 }
 

@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestJob_Fail(t *testing.T) {
+	for _, status := range []Status{StatusPending, StatusRunning, StatusCompleted, StatusFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			j := Job{Status: status}
+			err := j.Fail()
+			want := status
+			if status == StatusRunning {
+				if err != nil {
+					t.Fatalf("failing job: %v", err)
+				}
+				want = StatusFailed
+			} else if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("expected ErrInvalidTransition, got %v", err)
+			}
+			if j.Status != want {
+				t.Fatalf("expected status %s, got %s", want, j.Status)
+			}
+		})
+	}
+}
+
 func TestJob_Start(t *testing.T) {
 	j := Job{
 		Status: StatusPending,
