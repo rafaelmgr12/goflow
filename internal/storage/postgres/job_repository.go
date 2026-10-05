@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
@@ -225,4 +226,65 @@ func (r *JobRepository) MarkFailed(
 	}
 
 	return nil
+}
+
+func (r *JobRepository) FindDueJobs(
+	ctx context.Context,
+	dueTime time.Time,
+	limit int,
+) ([]job.Job, error) {
+	const query = `SELECT
+    id,
+    type,
+    payload,
+    status,
+    scheduled_at,
+    created_at
+FROM jobs
+WHERE status = $1
+  AND scheduled_at <= $2
+ORDER BY
+    scheduled_at ASC,
+    created_at ASC,
+    id ASC
+LIMIT $3;`
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		job.StatusPending,
+		dueTime,
+		limit,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("finding due jobs: %w", err)
+	}
+
+	defer rows.Close()
+
+	var jobs []job.Job
+
+	for rows.Next() {
+		var j job.Job
+
+		if err := rows.Scan(
+			&j.ID,
+			&j.Type,
+			&j.Payload,
+			&j.Status,
+			&j.ScheduledAt,
+			&j.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning job: %w", err)
+		}
+
+		jobs = append(jobs, j)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating over jobs: %w", err)
+	}
+
+	return jobs, nil
 }

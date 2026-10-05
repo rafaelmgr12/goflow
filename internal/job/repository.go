@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var ErrNotFound = errors.New("job not found")
@@ -10,6 +11,8 @@ var ErrNotFound = errors.New("job not found")
 type Repository interface {
 	Save(ctx context.Context, job Job) error
 	FindByID(ctx context.Context, id string) (Job, error)
+
+	FindDueJobs(ctx context.Context, dueTime time.Time, limit int) ([]Job, error)
 
 	MarkRunning(ctx context.Context, id string) error
 	MarkCompleted(ctx context.Context, id string) error
