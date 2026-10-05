@@ -21,13 +21,22 @@ func NewScheduler(
 	jobs chan<- job.Job,
 	batchSize int,
 	pollInterval time.Duration,
-) *Scheduler {
+) (*Scheduler, error) {
+
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("batchSize must be greater than 0, got %d", batchSize)
+	}
+
+	if pollInterval <= 0 {
+		return nil, fmt.Errorf("pollInterval must be greater than 0, got %v", pollInterval)
+	}
+
 	return &Scheduler{
 		repository:   repository,
 		jobs:         jobs,
 		batchSize:    batchSize,
 		pollInterval: pollInterval,
-	}
+	}, nil
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {

@@ -22,6 +22,47 @@ type fakeRepository struct {
 	queried chan time.Time
 }
 
+func TestNewScheduler(t *testing.T) {
+	tests := []struct {
+		name         string
+		batchSize    int
+		pollInterval time.Duration
+		wantError    bool
+	}{
+		{name: "Valid", batchSize: 10, pollInterval: time.Second},
+		{name: "MinimumPositiveValues", batchSize: 1, pollInterval: time.Nanosecond},
+		{name: "ZeroBatchSize", batchSize: 0, pollInterval: time.Second, wantError: true},
+		{name: "NegativeBatchSize", batchSize: -1, pollInterval: time.Second, wantError: true},
+		{name: "ZeroPollInterval", batchSize: 10, pollInterval: 0, wantError: true},
+		{name: "NegativePollInterval", batchSize: 10, pollInterval: -time.Second, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := &fakeRepository{}
+			jobs := make(chan job.Job)
+			s, err := NewScheduler(repository, jobs, tt.batchSize, tt.pollInterval)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				if s != nil {
+					t.Fatal("expected nil scheduler on validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("creating scheduler: %v", err)
+			}
+			if s == nil {
+				t.Fatal("expected scheduler")
+			}
+			if s.repository != repository || s.jobs != jobs || s.batchSize != tt.batchSize || s.pollInterval != tt.pollInterval {
+				t.Fatal("scheduler configuration does not match constructor arguments")
+			}
+		})
+	}
+}
+
 func (f *fakeRepository) FindDueJobs(ctx context.Context, dueTime time.Time, limit int) ([]job.Job, error) {
 	f.called = true
 	f.calls++
@@ -42,7 +83,10 @@ func (f *fakeRepository) FindDueJobs(ctx context.Context, dueTime time.Time, lim
 
 func TestScheduler_Run_PollsImmediately(t *testing.T) {
 	repository := &fakeRepository{queried: make(chan time.Time, 1)}
-	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	s, err := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("creating scheduler: %v", err)
+	}
 	done, cancel := startScheduler(t, s)
 
 	select {
@@ -73,7 +117,10 @@ func TestScheduler_Run_ContinuesAfterPollError(t *testing.T) {
 			want := job.Job{ID: "job-1", Status: job.StatusPending}
 			repository := &fakeRepository{errors: tt.errors, jobs: []job.Job{want}}
 			jobs := make(chan job.Job)
-			s := NewScheduler(repository, jobs, 10, 10*time.Millisecond)
+			s, err := NewScheduler(repository, jobs, 10, 10*time.Millisecond)
+			if err != nil {
+				t.Fatalf("creating scheduler: %v", err)
+			}
 			done, cancel := startScheduler(t, s)
 
 			select {
@@ -98,7 +145,10 @@ func TestScheduler_Run_CanceledWhileSending(t *testing.T) {
 		queried: make(chan time.Time, 1),
 	}
 	// No receiver: Run must leave the blocked send when canceled.
-	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	s, err := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("creating scheduler: %v", err)
+	}
 	done, cancel := startScheduler(t, s)
 	select {
 	case <-repository.queried:
@@ -115,7 +165,10 @@ func TestScheduler_Run_CanceledContextWithRepositoryError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	repository := &fakeRepository{err: errors.New("repository unavailable")}
-	s := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	s, err := NewScheduler(repository, make(chan job.Job), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("creating scheduler: %v", err)
+	}
 	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -182,9 +235,12 @@ func TestScheduler_Poll(t *testing.T) {
 			}
 			// A buffer lets poll send without starting a worker goroutine.
 			jobs := make(chan job.Job, batchSize)
-			s := NewScheduler(repository, jobs, batchSize, time.Second)
+			s, err := NewScheduler(repository, jobs, batchSize, time.Second)
+			if err != nil {
+				t.Fatalf("creating scheduler: %v", err)
+			}
 
-			err := s.poll(ctx, dueTime)
+			err = s.poll(ctx, dueTime)
 			if !errors.Is(err, tt.err) {
 				t.Fatalf("expected error %v, got %v", tt.err, err)
 			}
@@ -218,7 +274,10 @@ func TestScheduler_Poll_CanceledContext(t *testing.T) {
 	}
 	// With no receiver, sending cannot win the select against cancellation.
 	jobs := make(chan job.Job)
-	s := NewScheduler(repository, jobs, 10, time.Second)
+	s, err := NewScheduler(repository, jobs, 10, time.Second)
+	if err != nil {
+		t.Fatalf("creating scheduler: %v", err)
+	}
 	if err := s.poll(ctx, time.Now()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
