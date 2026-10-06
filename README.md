@@ -24,6 +24,31 @@ make run
 
 The application connects to `localhost:5432` using `goflow` as the database name, username, and password. These settings are intended for local development.
 
+## Environment configuration
+
+The application loads configuration from environment variables through `internal/config`.
+Defaults apply only to unset variables; explicitly empty settings are rejected,
+except for email credentials when the provider is not `resend`.
+
+| Variable | Local default |
+| --- | --- |
+| `DATABASE_URL` | `postgres://goflow:goflow@localhost:5432/goflow?sslmode=disable` |
+| `WORKER_COUNT` | `3` |
+| `WORKER_JOB_TIMEOUT` | `30s` |
+| `SCHEDULER_BATCH_SIZE` | `100` |
+| `SCHEDULER_POLL_INTERVAL` | `5s` |
+| `EMAIL_PROVIDER` | `log` |
+| `RESEND_API_KEY` | Unset |
+| `EMAIL_FROM` | Unset |
+
+Counts and durations must be greater than zero. Durations use Go syntax,
+such as `250ms`, `30s`, or `1m30s`.
+
+With `EMAIL_PROVIDER=resend`, both `RESEND_API_KEY` and `EMAIL_FROM` are required.
+Configuration loading does not construct adapters or send email. The current
+entry point still uses the demonstration email handler; the Resend adapter and
+provider selection will be wired separately.
+
 ## Commands
 
 | Command | Description |

@@ -41,6 +41,7 @@ func TestWorkerProcessesJob(t *testing.T) {
 			1,
 			jobs,
 			processor,
+			30*time.Second,
 		)
 
 		close(done)
@@ -95,6 +96,7 @@ func TestWorkerStopsWhenContextIsCancelled(t *testing.T) {
 			1,
 			jobs,
 			processor,
+			30*time.Second,
 		)
 
 		close(done)
@@ -150,6 +152,7 @@ func TestWorkerAllowsInFlightJobToFinishAfterCancellation(
 			1,
 			jobs,
 			processor,
+			30*time.Second,
 		)
 
 		close(done)
@@ -196,5 +199,40 @@ func TestWorkerAllowsInFlightJobToFinishAfterCancellation(
 		t.Fatal(
 			"worker did not shut down after in-flight job completed",
 		)
+	}
+}
+
+type timeoutProcessor struct {
+	result chan error
+}
+
+func (p *timeoutProcessor) Process(ctx context.Context, _ job.Job) error {
+	<-ctx.Done()
+	p.result <- ctx.Err()
+	return ctx.Err()
+}
+
+func TestWorkerUsesConfiguredJobTimeout(t *testing.T) {
+	processor := &timeoutProcessor{result: make(chan error, 1)}
+	jobs := make(chan job.Job, 1)
+	jobs <- job.Job{ID: "timeout-job"}
+	close(jobs)
+	done := make(chan struct{})
+	go func() {
+		Run(context.Background(), 1, jobs, processor, 10*time.Millisecond)
+		close(done)
+	}()
+	select {
+	case err := <-processor.result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected deadline exceeded, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enforce configured timeout")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not finish")
 	}
 }

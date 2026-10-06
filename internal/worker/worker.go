@@ -17,6 +17,7 @@ func Run(
 	id int,
 	jobs <-chan job.Job,
 	processor Processor,
+	jobTimeout time.Duration,
 ) {
 	for {
 		select {
@@ -47,7 +48,7 @@ func Run(
 
 				jobCtx, cancel := context.WithTimeout(
 					baseCtx,
-					30*time.Second,
+					jobTimeout,
 				)
 				defer cancel()
 

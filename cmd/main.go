@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rafaelmgr12/goflow/config"
 	"github.com/rafaelmgr12/goflow/internal/job"
 	"github.com/rafaelmgr12/goflow/internal/processor"
 	"github.com/rafaelmgr12/goflow/internal/scheduler"
@@ -22,6 +23,11 @@ import (
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("loading configuration: ", err)
+	}
+
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -31,7 +37,7 @@ func main() {
 
 	db, err := sql.Open(
 		"pgx",
-		"postgres://goflow:goflow@localhost:5432/goflow?sslmode=disable",
+		cfg.Database.URL,
 	)
 	if err != nil {
 		log.Fatal("opening postgres: ", err)
@@ -60,11 +66,9 @@ func main() {
 
 	jobs := make(chan job.Job)
 
-	const workerCount = 3
-
 	var workers sync.WaitGroup
 
-	for id := 1; id <= workerCount; id++ {
+	for id := 1; id <= cfg.Worker.Count; id++ {
 		workers.Add(1)
 
 		go func(workerID int) {
@@ -75,17 +79,16 @@ func main() {
 				workerID,
 				jobs,
 				jobProcessor,
+				cfg.Worker.JobTimeout,
 			)
 		}(id)
 	}
 
-	const batchSize = 100
-
 	schedulerService, err := scheduler.NewScheduler(
 		repo,
 		jobs,
-		batchSize,
-		5*time.Second,
+		cfg.Scheduler.BatchSize,
+		cfg.Scheduler.PollInterval,
 	)
 	if err != nil {
 		log.Fatal("creating scheduler: ", err)
