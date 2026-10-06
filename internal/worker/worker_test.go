@@ -2,40 +2,37 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
 
-type fakeHandler struct {
-	called chan job.Job
+type fakeProcessor struct {
+	processed chan job.Job
+	err       error
 }
 
-func (f *fakeHandler) Handle(
+func (f *fakeProcessor) Process(
 	ctx context.Context,
 	j job.Job,
 ) error {
-	f.called <- j
-	return nil
+	if f.processed != nil {
+		f.processed <- j
+	}
+
+	return f.err
 }
 
 func TestWorkerProcessesJob(t *testing.T) {
 	ctx := context.Background()
 
-	handler := &fakeHandler{
-		called: make(chan job.Job, 1),
+	processor := &fakeProcessor{
+		processed: make(chan job.Job, 1),
 	}
 
-	executor := job.NewExecutor()
-
-	executor.Register(
-		"send_email",
-		handler,
-	)
-
 	jobs := make(chan job.Job)
-
 	done := make(chan struct{})
 
 	go func() {
@@ -43,7 +40,7 @@ func TestWorkerProcessesJob(t *testing.T) {
 			ctx,
 			1,
 			jobs,
-			executor,
+			processor,
 		)
 
 		close(done)
@@ -58,7 +55,7 @@ func TestWorkerProcessesJob(t *testing.T) {
 	jobs <- expectedJob
 
 	select {
-	case receivedJob := <-handler.called:
+	case receivedJob := <-processor.processed:
 		if receivedJob.ID != expectedJob.ID {
 			t.Fatalf(
 				"expected job %s, got %s",
@@ -83,11 +80,13 @@ func TestWorkerProcessesJob(t *testing.T) {
 }
 
 func TestWorkerStopsWhenContextIsCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
 
-	executor := job.NewExecutor()
+	processor := &fakeProcessor{}
+
 	jobs := make(chan job.Job)
-
 	done := make(chan struct{})
 
 	go func() {
@@ -95,7 +94,7 @@ func TestWorkerStopsWhenContextIsCancelled(t *testing.T) {
 			ctx,
 			1,
 			jobs,
-			executor,
+			processor,
 		)
 
 		close(done)
@@ -108,6 +107,94 @@ func TestWorkerStopsWhenContextIsCancelled(t *testing.T) {
 		// worker stopped
 
 	case <-time.After(time.Second):
-		t.Fatal("worker did not stop after context cancellation")
+		t.Fatal(
+			"worker did not stop after context cancellation",
+		)
+	}
+}
+
+type blockingProcessor struct {
+	started chan context.Context
+	release chan struct{}
+}
+
+func (p *blockingProcessor) Process(
+	ctx context.Context,
+	j job.Job,
+) error {
+	p.started <- ctx
+
+	<-p.release
+
+	return nil
+}
+
+func TestWorkerAllowsInFlightJobToFinishAfterCancellation(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
+
+	processor := &blockingProcessor{
+		started: make(chan context.Context, 1),
+		release: make(chan struct{}),
+	}
+
+	jobs := make(chan job.Job)
+	done := make(chan struct{})
+
+	go func() {
+		Run(
+			ctx,
+			1,
+			jobs,
+			processor,
+		)
+
+		close(done)
+	}()
+
+	jobs <- job.Job{
+		ID:     "job-1",
+		Type:   "send_email",
+		Status: job.StatusPending,
+	}
+
+	var jobCtx context.Context
+
+	select {
+	case jobCtx = <-processor.started:
+
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start processing job")
+	}
+
+	cancel()
+
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf(
+			"expected worker context to be canceled, got %v",
+			ctx.Err(),
+		)
+	}
+
+	if err := jobCtx.Err(); err != nil {
+		t.Fatalf(
+			"expected in-flight job context to remain active, got %v",
+			err,
+		)
+	}
+
+	close(processor.release)
+
+	select {
+	case <-done:
+		// worker finished after the in-flight job completed
+
+	case <-time.After(time.Second):
+		t.Fatal(
+			"worker did not shut down after in-flight job completed",
+		)
 	}
 }

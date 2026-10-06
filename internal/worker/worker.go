@@ -8,11 +8,15 @@ import (
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
 
+type Processor interface {
+	Process(ctx context.Context, job job.Job) error
+}
+
 func Run(
 	ctx context.Context,
 	id int,
 	jobs <-chan job.Job,
-	executor *job.Executor,
+	processor Processor,
 ) {
 	for {
 		select {
@@ -38,22 +42,24 @@ func Run(
 				j.ID,
 			)
 
-			baseCtx := context.WithoutCancel(ctx)
+			func() {
+				baseCtx := context.WithoutCancel(ctx)
 
-			jobCtx, cancel := context.WithTimeout(
-				baseCtx,
-				30*time.Second,
-			)
-
-			if err := executor.Execute(jobCtx, j); err != nil {
-				log.Printf(
-					"worker %d failed job %s: %v",
-					id,
-					j.ID,
-					err,
+				jobCtx, cancel := context.WithTimeout(
+					baseCtx,
+					30*time.Second,
 				)
-			}
-			cancel()
+				defer cancel()
+
+				if err := processor.Process(jobCtx, j); err != nil {
+					log.Printf(
+						"worker %d failed job %s: %v",
+						id,
+						j.ID,
+						err,
+					)
+				}
+			}()
 		}
 	}
 }
