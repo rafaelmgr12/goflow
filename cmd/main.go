@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rafaelmgr12/goflow/config"
 	"github.com/rafaelmgr12/goflow/internal/adapter/email/logsender"
 	"github.com/rafaelmgr12/goflow/internal/adapter/email/resend"
+	"github.com/rafaelmgr12/goflow/internal/config"
 	"github.com/rafaelmgr12/goflow/internal/job"
 	"github.com/rafaelmgr12/goflow/internal/processor"
 	"github.com/rafaelmgr12/goflow/internal/scheduler"
