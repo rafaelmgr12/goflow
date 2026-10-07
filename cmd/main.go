@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/rafaelmgr12/goflow/config"
+	"github.com/rafaelmgr12/goflow/internal/adapter/email/logsender"
+	"github.com/rafaelmgr12/goflow/internal/adapter/email/resend"
 	"github.com/rafaelmgr12/goflow/internal/job"
 	"github.com/rafaelmgr12/goflow/internal/processor"
 	"github.com/rafaelmgr12/goflow/internal/scheduler"
 	"github.com/rafaelmgr12/goflow/internal/storage/postgres"
+	"github.com/rafaelmgr12/goflow/internal/tasks/email"
 	"github.com/rafaelmgr12/goflow/internal/worker"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -26,6 +29,16 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal("loading configuration: ", err)
+	}
+
+	var emailSender email.Sender
+	switch cfg.Email.Provider {
+	case "log":
+		emailSender = logsender.New()
+	case "resend":
+		emailSender = resend.New(cfg.Email.ResendAPIKey, cfg.Email.From)
+	default:
+		log.Fatal("unsupported EMAIL_PROVIDER: expected log or resend")
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -54,10 +67,8 @@ func main() {
 
 	executor := job.NewExecutor()
 
-	executor.Register(
-		"send_email",
-		job.EmailHandler{},
-	)
+	emailHandler := email.NewHandler(emailSender)
+	executor.Register(email.Type, emailHandler)
 
 	jobProcessor := processor.NewProcessor(
 		repo,
@@ -105,8 +116,8 @@ func main() {
 
 	j := job.Job{
 		ID:          fmt.Sprintf("job-%d", now.UnixNano()),
-		Type:        "send_email",
-		Payload:     []byte(`{"to":"rafa@example.com"}`),
+		Type:        email.Type,
+		Payload:     []byte(`{"to":"rafa@example.com","subject":"GoFlow test","body":"Hello from GoFlow"}`),
 		Status:      job.StatusPending,
 		ScheduledAt: now,
 		CreatedAt:   now,

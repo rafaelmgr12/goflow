@@ -26,7 +26,12 @@ The application connects to `localhost:5432` using `goflow` as the database name
 
 ## Environment configuration
 
-The application loads configuration from environment variables through `internal/config`.
+The application loads `.env` from the working directory through `config.Load()`.
+Copy `.env.example` to `.env`, adjust the values, and run `make run`.
+Process environment variables take precedence over `.env`; missing files are allowed.
+The loader does not change the process environment. It supports `KEY=value`, optional
+`export`, single or double quotes, and comments. Values are literal, without shell
+commands, escape processing, or variable expansion. `.env.example` is only a template.
 Defaults apply only to unset variables; explicitly empty settings are rejected,
 except for email credentials when the provider is not `resend`.
 
@@ -45,9 +50,9 @@ Counts and durations must be greater than zero. Durations use Go syntax,
 such as `250ms`, `30s`, or `1m30s`.
 
 With `EMAIL_PROVIDER=resend`, both `RESEND_API_KEY` and `EMAIL_FROM` are required.
-Configuration loading does not construct adapters or send email. The current
-entry point still uses the demonstration email handler; the Resend adapter and
-provider selection will be wired separately.
+Configuration loading does not construct adapters or send email. The entry point constructs the `log` or `resend` adapter and injects it into
+the email task handler. Unsupported providers cause a startup error. The `log`
+adapter prints the message without requiring credentials or sending email.
 
 ## Commands
 
