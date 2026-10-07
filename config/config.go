@@ -30,36 +30,41 @@ type EmailConfig struct {
 	From         string
 }
 
-// Load uses local defaults for unset variables. Explicitly empty settings are
+// Load reads .env in the working directory. Process variables take precedence.
+// Missing .env files are allowed. Local defaults apply to unset variables. Explicitly empty settings are
 // invalid, except for email credentials when the provider is not resend.
 // Provider support and adapter construction belong to the application.
 func Load() (Config, error) {
+	env, err := readDotEnv(".env")
+	if err != nil {
+		return Config{}, err
+	}
+
 	var cfg Config
-	cfg.Database.URL = envOrDefault("DATABASE_URL", "postgres://goflow:goflow@localhost:5432/goflow?sslmode=disable")
+	cfg.Database.URL = env.orDefault("DATABASE_URL", "postgres://goflow:goflow@localhost:5432/goflow?sslmode=disable")
 	if cfg.Database.URL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL must not be empty")
 	}
-	var err error
-	cfg.Worker.Count, err = positiveInt("WORKER_COUNT", "3")
+	cfg.Worker.Count, err = env.positiveInt("WORKER_COUNT", "3")
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.Worker.JobTimeout, err = positiveDuration("WORKER_JOB_TIMEOUT", "30s")
+	cfg.Worker.JobTimeout, err = env.positiveDuration("WORKER_JOB_TIMEOUT", "30s")
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.Scheduler.BatchSize, err = positiveInt("SCHEDULER_BATCH_SIZE", "100")
+	cfg.Scheduler.BatchSize, err = env.positiveInt("SCHEDULER_BATCH_SIZE", "100")
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.Scheduler.PollInterval, err = positiveDuration("SCHEDULER_POLL_INTERVAL", "5s")
+	cfg.Scheduler.PollInterval, err = env.positiveDuration("SCHEDULER_POLL_INTERVAL", "5s")
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.Email = EmailConfig{
-		Provider:     envOrDefault("EMAIL_PROVIDER", "log"),
-		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
-		From:         os.Getenv("EMAIL_FROM"),
+		Provider:     env.orDefault("EMAIL_PROVIDER", "log"),
+		ResendAPIKey: env.orDefault("RESEND_API_KEY", ""),
+		From:         env.orDefault("EMAIL_FROM", ""),
 	}
 	if cfg.Email.Provider == "" {
 		return Config{}, fmt.Errorf("EMAIL_PROVIDER must not be empty")
@@ -75,15 +80,18 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-func envOrDefault(name, fallback string) string {
+func (env environment) orDefault(name, fallback string) string {
 	if value, ok := os.LookupEnv(name); ok {
+		return value
+	}
+	if value, ok := env[name]; ok {
 		return value
 	}
 	return fallback
 }
 
-func positiveInt(name, fallback string) (int, error) {
-	value, err := strconv.Atoi(envOrDefault(name, fallback))
+func (env environment) positiveInt(name, fallback string) (int, error) {
+	value, err := strconv.Atoi(env.orDefault(name, fallback))
 	// Do not include environment values in errors: they may contain secrets.
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid integer", name)
@@ -94,8 +102,8 @@ func positiveInt(name, fallback string) (int, error) {
 	return value, nil
 }
 
-func positiveDuration(name, fallback string) (time.Duration, error) {
-	value, err := time.ParseDuration(envOrDefault(name, fallback))
+func (env environment) positiveDuration(name, fallback string) (time.Duration, error) {
+	value, err := time.ParseDuration(env.orDefault(name, fallback))
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid duration (for example, 30s)", name)
 	}

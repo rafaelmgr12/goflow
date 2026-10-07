@@ -15,6 +15,7 @@ var envNames = []string{
 
 func cleanEnv(t *testing.T) {
 	t.Helper()
+	t.Chdir(t.TempDir())
 	for _, name := range envNames {
 		// Setenv registers restoration and prevents parallel execution.
 		t.Setenv(name, os.Getenv(name))
