@@ -12,7 +12,7 @@ type Handler struct {
 	writer Writer
 }
 
-func NewHandler(writer Writer) *Handler {
+func New(writer Writer) *Handler {
 	return &Handler{
 		writer: writer,
 	}
