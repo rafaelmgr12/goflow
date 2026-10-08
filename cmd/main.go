@@ -157,19 +157,6 @@ func main() {
 
 	log.Printf("report demo job %s created", reportJob.ID)
 
-	j1, err := repo.FindByID(ctx, j.ID)
-	if err != nil {
-		log.Fatal("finding demo job: ", err)
-	}
-
-	j2, err := repo.FindByID(ctx, reportJob.ID)
-	if err != nil {
-		log.Fatal("finding report demo job: ", err)
-	}
-
-	log.Printf("demo job %s status: %s", j1.ID, j1.Status)
-	log.Printf("report demo job %s status: %s", j2.ID, j2.Status)
-
 	<-ctx.Done()
 
 	log.Println("shutdown requested")

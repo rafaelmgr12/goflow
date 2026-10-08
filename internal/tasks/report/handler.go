@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/rafaelmgr12/goflow/internal/job"
 )
@@ -30,11 +31,21 @@ func (h *Handler) Handle(ctx context.Context, j job.Job) error {
 		)
 	}
 
+	if strings.TrimSpace(payload.Title) == "" {
+		return fmt.Errorf("validating report payload: title must not be empty or whitespace")
+	}
+	if strings.TrimSpace(payload.Content) == "" {
+		return fmt.Errorf("validating report payload: content must not be empty or whitespace")
+	}
+
 	document := Document{
 		JobID:   j.ID,
 		Title:   payload.Title,
 		Content: payload.Content,
 	}
 
-	return h.writer.Write(ctx, document)
+	if err := h.writer.Write(ctx, document); err != nil {
+		return fmt.Errorf("writing report for job %s: %w", j.ID, err)
+	}
+	return nil
 }
