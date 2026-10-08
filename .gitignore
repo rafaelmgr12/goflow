@@ -31,6 +31,9 @@ go.work.sum
 # Executáveis gerados pelo Makefile
 /bin/
 
+# folders
+output/
+
 # Editor/IDE
 # .idea/
 # .vscode/
