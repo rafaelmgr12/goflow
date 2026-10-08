@@ -11,6 +11,7 @@ var envNames = []string{
 	"DATABASE_URL", "WORKER_COUNT", "WORKER_JOB_TIMEOUT",
 	"SCHEDULER_BATCH_SIZE", "SCHEDULER_POLL_INTERVAL",
 	"EMAIL_PROVIDER", "RESEND_API_KEY", "EMAIL_FROM",
+	"REPORT_PROVIDER", "REPORT_OUTPUT_DIR",
 }
 
 func cleanEnv(t *testing.T) {
@@ -31,6 +32,7 @@ func TestLoad(t *testing.T) {
 		Worker:    WorkerConfig{Count: 3, JobTimeout: 30 * time.Second},
 		Scheduler: SchedulerConfig{BatchSize: 100, PollInterval: 5 * time.Second},
 		Email:     EmailConfig{Provider: "log"},
+		Report:    ReportConfig{Provider: "localfile", OutputDir: "./output"},
 	}
 	tests := []struct {
 		name string
@@ -43,11 +45,13 @@ func TestLoad(t *testing.T) {
 			"DATABASE_URL": "postgres://localhost/custom", "WORKER_COUNT": "7", "WORKER_JOB_TIMEOUT": "1m30s",
 			"SCHEDULER_BATCH_SIZE": "25", "SCHEDULER_POLL_INTERVAL": "250ms",
 			"EMAIL_PROVIDER": "resend", "RESEND_API_KEY": "test-secret", "EMAIL_FROM": "jobs@example.com",
+			"REPORT_PROVIDER": "localfile", "REPORT_OUTPUT_DIR": "./custom-reports",
 		}, want: Config{
 			Database:  DatabaseConfig{URL: "postgres://localhost/custom"},
 			Worker:    WorkerConfig{Count: 7, JobTimeout: 90 * time.Second},
 			Scheduler: SchedulerConfig{BatchSize: 25, PollInterval: 250 * time.Millisecond},
 			Email:     EmailConfig{Provider: "resend", ResendAPIKey: "test-secret", From: "jobs@example.com"},
+			Report:    ReportConfig{Provider: "localfile", OutputDir: "./custom-reports"},
 		}},
 	}
 	for _, tt := range tests {
@@ -71,6 +75,8 @@ func TestLoadInvalidSettings(t *testing.T) {
 	tests := []struct{ name, value, message string }{
 		{"DATABASE_URL", "", "must not be empty"},
 		{"EMAIL_PROVIDER", "", "must not be empty"},
+		{"REPORT_PROVIDER", "", "must not be empty"},
+		{"REPORT_OUTPUT_DIR", "", "must not be empty"},
 	}
 	for _, name := range []string{"WORKER_COUNT", "SCHEDULER_BATCH_SIZE"} {
 		for _, value := range []string{"", "abc", "1.5", "999999999999999999999999999999"} {

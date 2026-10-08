@@ -13,6 +13,7 @@ type Config struct {
 	Scheduler SchedulerConfig
 	Worker    WorkerConfig
 	Email     EmailConfig
+	Report    ReportConfig
 }
 
 type DatabaseConfig struct{ URL string }
@@ -28,6 +29,11 @@ type EmailConfig struct {
 	Provider     string
 	ResendAPIKey string
 	From         string
+}
+
+type ReportConfig struct {
+	Provider  string
+	OutputDir string
 }
 
 // Load reads .env in the working directory. Process variables take precedence.
@@ -76,6 +82,16 @@ func Load() (Config, error) {
 		if cfg.Email.From == "" {
 			return Config{}, fmt.Errorf("EMAIL_FROM is required when EMAIL_PROVIDER=resend")
 		}
+	}
+	cfg.Report = ReportConfig{
+		Provider:  env.orDefault("REPORT_PROVIDER", "localfile"),
+		OutputDir: env.orDefault("REPORT_OUTPUT_DIR", "./output"),
+	}
+	if cfg.Report.Provider == "" {
+		return Config{}, fmt.Errorf("REPORT_PROVIDER must not be empty")
+	}
+	if cfg.Report.OutputDir == "" {
+		return Config{}, fmt.Errorf("REPORT_OUTPUT_DIR must not be empty")
 	}
 	return cfg, nil
 }

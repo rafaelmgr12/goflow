@@ -14,12 +14,14 @@ import (
 
 	"github.com/rafaelmgr12/goflow/internal/adapter/email/logsender"
 	"github.com/rafaelmgr12/goflow/internal/adapter/email/resend"
+	"github.com/rafaelmgr12/goflow/internal/adapter/report/localfile"
 	"github.com/rafaelmgr12/goflow/internal/config"
 	"github.com/rafaelmgr12/goflow/internal/job"
 	"github.com/rafaelmgr12/goflow/internal/processor"
 	"github.com/rafaelmgr12/goflow/internal/scheduler"
 	"github.com/rafaelmgr12/goflow/internal/storage/postgres"
 	"github.com/rafaelmgr12/goflow/internal/tasks/email"
+	"github.com/rafaelmgr12/goflow/internal/tasks/report"
 	"github.com/rafaelmgr12/goflow/internal/worker"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -39,6 +41,14 @@ func main() {
 		emailSender = resend.New(cfg.Email.ResendAPIKey, cfg.Email.From)
 	default:
 		log.Fatal("unsupported EMAIL_PROVIDER: expected log or resend")
+	}
+
+	var reportWriter report.Writer
+	switch cfg.Report.Provider {
+	case "localfile":
+		reportWriter = localfile.New(cfg.Report.OutputDir)
+	default:
+		log.Fatal("unsupported REPORT_PROVIDER: expected localfile")
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -69,6 +79,9 @@ func main() {
 
 	emailHandler := email.NewHandler(emailSender)
 	executor.Register(email.Type, emailHandler)
+
+	reportHandler := report.New(reportWriter)
+	executor.Register(report.Type, reportHandler)
 
 	jobProcessor := processor.NewProcessor(
 		repo,
@@ -111,7 +124,7 @@ func main() {
 		schedulerDone <- schedulerService.Run(ctx)
 	}()
 
-	// Temporary demo job for end-to-end validation.
+	// Temporary demo jobs for end-to-end validation.
 	now := time.Now().UTC()
 
 	j := job.Job{
@@ -128,6 +141,34 @@ func main() {
 	}
 
 	log.Printf("demo job %s created", j.ID)
+
+	reportJob := job.Job{
+		ID:          fmt.Sprintf("report-%d", now.UnixNano()),
+		Type:        report.Type,
+		Payload:     []byte(`{"title":"Relatório GoFlow","content":"Este relatório foi gerado pelo pipeline de jobs do GoFlow."}`),
+		Status:      job.StatusPending,
+		ScheduledAt: now,
+		CreatedAt:   now,
+	}
+
+	if err := repo.Save(ctx, reportJob); err != nil {
+		log.Fatal("saving report demo job: ", err)
+	}
+
+	log.Printf("report demo job %s created", reportJob.ID)
+
+	j1, err := repo.FindByID(ctx, j.ID)
+	if err != nil {
+		log.Fatal("finding demo job: ", err)
+	}
+
+	j2, err := repo.FindByID(ctx, reportJob.ID)
+	if err != nil {
+		log.Fatal("finding report demo job: ", err)
+	}
+
+	log.Printf("demo job %s status: %s", j1.ID, j1.Status)
+	log.Printf("report demo job %s status: %s", j2.ID, j2.Status)
 
 	<-ctx.Done()
 
